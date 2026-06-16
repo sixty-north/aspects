@@ -1,6 +1,6 @@
 """Utilities for enriching CLI tools with structured report output."""
 
-__version__ = "1.2.1"
+__version__ = "1.3.0"
 
 from asyoulikeit.audience import Audience, ByAudience, resolve_audience
 from asyoulikeit.cli import (
