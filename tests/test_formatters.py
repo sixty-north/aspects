@@ -12,6 +12,7 @@ from asyoulikeit.formatter import (
     FormatterExtensionError,
 )
 from asyoulikeit import Importance
+from asyoulikeit.ext.formatters.display.formatter import _sanitize_display
 
 
 def strip_ansi_codes(text: str) -> str:
@@ -118,6 +119,114 @@ class TestTSVFormatter:
 
         expected = "# Name\tActive\tScore\nAlice\tTrue\t95.5"
         assert result == expected
+
+
+# A cell value that bundles every byte capable of confounding a formatter:
+# the four TSV-structural bytes (backslash, tab, CR, LF) plus an assortment
+# of other C0 control bytes and DEL.
+_CONFOUNDING = "back\\slash\ttab\rcr\nlf\x0cff\x07bell\x08bs\x1besc\x7fdel"
+
+
+def _unescape_tsv(field: str) -> str:
+    """Reverse :func:`_escape_tsv` for a single field — for round-trip tests."""
+    out = []
+    i = 0
+    while i < len(field):
+        ch = field[i]
+        if ch == "\\" and i + 1 < len(field):
+            nxt = field[i + 1]
+            out.append({"\\": "\\", "t": "\t", "r": "\r", "n": "\n"}[nxt])
+            i += 2
+        else:
+            out.append(ch)
+            i += 1
+    return "".join(out)
+
+
+class TestTSVControlCharacterEscaping:
+    """TSV must stay parseable and reversible despite confounding cell bytes."""
+
+    def test_one_record_with_consistent_field_count(self):
+        data = (
+            TableContent()
+            .add_column("name", "Name")
+            .add_column("note", "Note")
+            .add_row(name="A", note=_CONFOUNDING)
+        )
+        result = create_formatter("tsv").format(Reports(data=Report(data=data)))
+
+        lines = result.split("\n")
+        # Header + exactly one data line — no phantom rows from \n or \r.
+        assert len(lines) == 2
+        # Both lines carry the same number of fields — no phantom columns
+        # from an embedded tab.
+        assert lines[0].count("\t") == lines[1].count("\t") == 1
+
+    def test_escaping_round_trips(self):
+        data = (
+            TableContent()
+            .add_column("name", "Name")
+            .add_column("note", "Note")
+            .add_row(name="A", note=_CONFOUNDING)
+        )
+        result = create_formatter("tsv").format(Reports(data=Report(data=data)))
+
+        note_field = result.split("\n")[1].split("\t")[1]
+        assert _unescape_tsv(note_field) == _CONFOUNDING
+
+    def test_backslash_escaped_first_so_literal_sequences_survive(self):
+        # A literal "\t" in the content must not be confused with a tab.
+        data = (
+            TableContent()
+            .add_column("note", "Note")
+            .add_row(note="literal\\tbackslash-t")
+        )
+        result = create_formatter("tsv").format(Reports(data=Report(data=data)))
+
+        field = result.split("\n")[1]
+        assert "\t" not in field
+        assert _unescape_tsv(field) == "literal\\tbackslash-t"
+
+    def test_non_structural_controls_pass_through_verbatim(self):
+        # TSV is a machine channel: bytes that don't affect parsing are left
+        # exactly as-is rather than scrubbed.
+        data = (
+            TableContent()
+            .add_column("note", "Note")
+            .add_row(note="bell\x07esc\x1b")
+        )
+        result = create_formatter("tsv").format(Reports(data=Report(data=data)))
+
+        assert "\x07" in result and "\x1b" in result
+
+
+class TestDisplayControlCharacterSanitization:
+    """Display must never leak a corrupting control byte to the terminal."""
+
+    def test_no_corrupting_controls_in_output(self):
+        data = (
+            TableContent(title="demo")
+            .add_column("name", "Name", header=True)
+            .add_column("note", "Note")
+            .add_row(name="A", note=_CONFOUNDING)
+        )
+        result = create_formatter("display").format(Reports(data=Report(data=data)))
+
+        # Strip the styling escape sequences Rich emits itself before
+        # auditing for content-originated control bytes.
+        no_ansi = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", result)
+        leaked = [
+            c for c in no_ansi
+            if (ord(c) < 0x20 and c not in "\t\n") or ord(c) == 0x7F
+        ]
+        assert leaked == []
+
+    def test_tab_and_newline_are_preserved_as_layout(self):
+        # TAB and LF are legitimate in-cell layout and must survive.
+        assert _sanitize_display("a\tb\nc") == "a\tb\nc"
+
+    def test_carriage_return_and_others_become_spaces(self):
+        assert _sanitize_display("a\rb\x07c\x7f") == "a b c "
 
 
 class TestJSONFormatter:
@@ -258,6 +367,18 @@ class TestJSONFormatter:
                 }
             }
         }
+
+    def test_control_characters_round_trip_unchanged(self):
+        """Regression: JSON still preserves confounding bytes losslessly."""
+        data = (
+            TableContent()
+            .add_column("note", "Note")
+            .add_row(note=_CONFOUNDING)
+        )
+        result = create_formatter("json").format(Reports(data=Report(data=data)))
+
+        parsed = json.loads(result)
+        assert parsed["reports"]["data"]["rows"][0]["note"] == _CONFOUNDING
 
 
 class TestFormatAs:

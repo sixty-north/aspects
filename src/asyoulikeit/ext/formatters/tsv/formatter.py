@@ -7,6 +7,26 @@ from asyoulikeit.tabular_data import DetailLevel, Importance, Reports, TableCont
 from asyoulikeit.tree_data import Node, TreeContent
 
 
+def _escape_tsv(value) -> str:
+    """Escape a cell value so it cannot break TSV's line/tab structure.
+
+    Backslash-escapes the four structural bytes — the backslash itself
+    first, so the encoding is reversible — turning an arbitrary value into
+    exactly one tab-free, newline-free field. A reader recovers the original
+    bytes by reversing the same four substitutions, the TSV analogue of
+    what JSON already does for free. Every other byte (including other C0
+    control characters) is left verbatim: it does not affect TSV parsing,
+    and TSV is a machine channel, not a terminal.
+    """
+    return (
+        str(value)
+        .replace("\\", "\\\\")
+        .replace("\t", "\\t")
+        .replace("\r", "\\r")
+        .replace("\n", "\\n")
+    )
+
+
 class TsvFormatter(Formatter):
     """Tab-separated values formatter for UNIX-style processing.
 
@@ -14,6 +34,15 @@ class TsvFormatter(Formatter):
     ``awk``, ``cut``, ``grep`` and friends. Headers are prefixed with
     ``# `` by default so downstream tools can skip the first line as a
     comment.
+
+    Cell values (and column labels) are escaped so that a value
+    containing a tab, newline or carriage return cannot invent a column
+    or split one logical record across physical lines. The four
+    structural bytes are backslash-escaped — ``\\`` → ``\\\\`` (first, so
+    the encoding is reversible), then ``\\t`` ``\\r`` ``\\n`` → their
+    two-character forms. A reader recovers the exact original bytes by
+    reversing those four substitutions. Other bytes pass through
+    untouched.
 
     Multiple reports are separated by blank lines. Within a single
     tree report, every node is flattened into its own row. Column 1
@@ -115,12 +144,12 @@ class TsvFormatter(Formatter):
 
         lines = []
         if header:
-            labels = [col.label for col in columns]
+            labels = [_escape_tsv(col.label) for col in columns]
             if labels:
                 labels[0] = f"# {labels[0]}"
             lines.append("\t".join(labels))
         for row in rows:
-            lines.append("\t".join(str(row[col.key]) for col in columns))
+            lines.append("\t".join(_escape_tsv(row[col.key]) for col in columns))
         return "\n".join(lines)
 
     # -- tree ---------------------------------------------------------------
@@ -148,17 +177,17 @@ class TsvFormatter(Formatter):
         lines = []
         if header:
             path_labels = [f"Path{k}" for k in range(1, max_depth + 1)]
-            data_labels = [col.label for col in non_header_cols]
-            all_labels = [header_col.label] + path_labels + data_labels
+            data_labels = [_escape_tsv(col.label) for col in non_header_cols]
+            all_labels = [_escape_tsv(header_col.label)] + path_labels + data_labels
             all_labels[0] = f"# {all_labels[0]}"
             lines.append("\t".join(all_labels))
 
         for ancestors, node in visible:
-            leaf_value = str(node.values[header_col.key])
+            leaf_value = _escape_tsv(node.values[header_col.key])
             # Full root-to-node path, left-packed, padded on the right.
-            full_path = [str(a) for a in ancestors] + [leaf_value]
+            full_path = [_escape_tsv(a) for a in ancestors] + [leaf_value]
             path_cells = full_path + [""] * (max_depth - len(full_path))
-            data_cells = [str(node.values[col.key]) for col in non_header_cols]
+            data_cells = [_escape_tsv(node.values[col.key]) for col in non_header_cols]
             lines.append("\t".join([leaf_value] + path_cells + data_cells))
 
         return "\n".join(lines)
@@ -175,8 +204,8 @@ class TsvFormatter(Formatter):
         regardless of the flag — it's pipe-noise.
         """
         if header and data.title:
-            return f"# {data.title}\n{data.value}"
-        return f"{data.value}"
+            return f"# {_escape_tsv(data.title)}\n{_escape_tsv(data.value)}"
+        return _escape_tsv(data.value)
 
     # -- shared helpers -----------------------------------------------------
 

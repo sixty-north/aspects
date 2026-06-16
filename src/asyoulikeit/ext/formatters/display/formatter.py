@@ -34,6 +34,26 @@ from asyoulikeit.tabular_data import (
 from asyoulikeit.tree_data import Node, TreeContent
 
 
+# C0 control bytes (U+0000–U+001F) and DEL (U+007F) are replaced with a
+# space before a value is handed to Rich — except TAB and LF, which are
+# legitimate in-cell layout and left intact. Everything else in that range
+# can drive the cursor (CR, backspace), ring the bell, or smuggle an escape
+# sequence into the terminal and corrupt the rendered table. This is the
+# minimum needed to stop arbitrary content mangling the output; how a
+# *visible* rendering of control characters should look (escape sequences,
+# Unicode control pictures, …) is the client's decision, not this layer's.
+_DISPLAY_CONTROL_TO_SPACE = {
+    codepoint: " "
+    for codepoint in (*range(0x20), 0x7F)
+    if codepoint not in (0x09, 0x0A)
+}
+
+
+def _sanitize_display(value) -> str:
+    """Neutralise corrupting control bytes in a value bound for the terminal."""
+    return str(value).translate(_DISPLAY_CONTROL_TO_SPACE)
+
+
 class DisplayFormatter(Formatter):
     """Human-oriented presentation formatter.
 
@@ -148,7 +168,7 @@ class DisplayFormatter(Formatter):
                 style_row = styles.rows[original_idx]
                 rich_cells = []
                 for col in columns:
-                    cell_value = str(row[col.key])
+                    cell_value = _sanitize_display(row[col.key])
                     cell_style_dict = style_row.get(col.key)
                     if cell_style_dict and isinstance(cell_style_dict, dict):
                         rich_cells.append(
@@ -158,7 +178,7 @@ class DisplayFormatter(Formatter):
                         rich_cells.append(cell_value)
                 table.add_row(*rich_cells)
             else:
-                table.add_row(*[str(row[col.key]) for col in columns])
+                table.add_row(*[_sanitize_display(row[col.key]) for col in columns])
 
         return self._render_to_string(table)
 
@@ -213,14 +233,14 @@ class DisplayFormatter(Formatter):
         # column to if nothing needed wrapping. The header column carries
         # the tree art, so its content is ``art + name``.
         name_w = max(
-            [cell_len(art + str(node.values[header_col.key]))
+            [cell_len(art + _sanitize_display(node.values[header_col.key]))
              for art, _c, node in rendered]
             + ([cell_len(header_col.label)] if header else [])
             + [1]
         )
         data_naturals = [
             max(
-                [cell_len(str(node.values[col.key]))
+                [cell_len(_sanitize_display(node.values[col.key]))
                  for _a, _c, node in rendered]
                 + ([cell_len(col.label)] if header else [])
                 + [1]
@@ -238,8 +258,11 @@ class DisplayFormatter(Formatter):
             for col in columns:
                 table.add_column(col.label, style="bold" if col.header else None)
             for art, _cont, node in rendered:
-                header_cell = art + str(node.values[header_col.key])
-                other_cells = [str(node.values[col.key]) for col in non_header_cols]
+                header_cell = art + _sanitize_display(node.values[header_col.key])
+                other_cells = [
+                    _sanitize_display(node.values[col.key])
+                    for col in non_header_cols
+                ]
                 table.add_row(header_cell, *other_cells)
         else:
             # At least one cell must wrap. Pin every column to an explicit
@@ -261,10 +284,14 @@ class DisplayFormatter(Formatter):
                     width=width_of[col.key],
                 )
             for art, cont, node in rendered:
-                name_text = art + str(node.values[header_col.key])
+                name_text = art + _sanitize_display(node.values[header_col.key])
                 name_lines = self._wrap(console, name_text, name_w)
                 data_lines = [
-                    self._wrap(console, str(node.values[col.key]), width_of[col.key])
+                    self._wrap(
+                        console,
+                        _sanitize_display(node.values[col.key]),
+                        width_of[col.key],
+                    )
                     for col in non_header_cols
                 ]
                 height = max([len(name_lines)] + [len(dl) for dl in data_lines])
@@ -308,7 +335,7 @@ class DisplayFormatter(Formatter):
             lines.append(data.title)
             lines.append("")
         for art, _cont, node in rendered:
-            lines.append(art + str(node.values[header_col.key]))
+            lines.append(art + _sanitize_display(node.values[header_col.key]))
         if header and data.description:
             lines.append("")
             lines.append(data.description)
@@ -421,7 +448,7 @@ class DisplayFormatter(Formatter):
         - If ``header`` is True and ``description`` is set: on the
           following line, rendered dim/italic via Rich.
         """
-        value_str = str(data.value)
+        value_str = _sanitize_display(data.value)
         if header and data.title:
             first_line = f"{data.title}: {value_str}"
         else:
