@@ -228,6 +228,120 @@ class TestResolveScalar:
         assert resolved.value == "hello"
 
 
+class TestResolveMetadata:
+    """ByAudience is honoured in titles, descriptions and column labels too,
+    not just cell values (issue #16)."""
+
+    def test_table_title_description_and_label_collapse(self):
+        data = TableContent(
+            title=ByAudience(machine="M-title", human="H-title"),
+            description=ByAudience(machine="M-desc", human="H-desc"),
+        )
+        data.add_column(
+            "name", ByAudience(machine="M-Name", human="H-Name"), header=True
+        )
+        data.add_row(name="x")
+
+        machine = resolve_audience(
+            Reports(r=Report(data=data)), Audience.MACHINE
+        )["r"].data
+        human = resolve_audience(
+            Reports(r=Report(data=data)), Audience.HUMAN
+        )["r"].data
+
+        assert (machine.title, machine.description) == ("M-title", "M-desc")
+        assert machine.columns[0].label == "M-Name"
+        assert (human.title, human.description) == ("H-title", "H-desc")
+        assert human.columns[0].label == "H-Name"
+
+    def test_tree_title_description_and_label_collapse(self):
+        data = TreeContent(
+            title=ByAudience(machine="M-title", human="H-title"),
+            description=ByAudience(machine="M-desc", human="H-desc"),
+        )
+        data.add_column(
+            "name", ByAudience(machine="M-Name", human="H-Name"), header=True
+        )
+        data.add_root(name="root")
+
+        machine = resolve_audience(
+            Reports(r=Report(data=data)), Audience.MACHINE
+        )["r"].data
+        human = resolve_audience(
+            Reports(r=Report(data=data)), Audience.HUMAN
+        )["r"].data
+
+        assert (machine.title, machine.description) == ("M-title", "M-desc")
+        assert machine.columns[0].label == "M-Name"
+        assert (human.title, human.description) == ("H-title", "H-desc")
+        assert human.columns[0].label == "H-Name"
+
+    def test_scalar_title_and_description_collapse(self):
+        data = ScalarContent(
+            value="v",
+            title=ByAudience(machine="M-title", human="H-title"),
+            description=ByAudience(machine="M-desc", human="H-desc"),
+        )
+        machine = resolve_audience(
+            Reports(r=Report(data=data)), Audience.MACHINE
+        )["r"].data
+        human = resolve_audience(
+            Reports(r=Report(data=data)), Audience.HUMAN
+        )["r"].data
+
+        assert (machine.title, machine.description) == ("M-title", "M-desc")
+        assert (human.title, human.description) == ("H-title", "H-desc")
+
+    def test_plain_metadata_strings_unchanged(self):
+        """Regression: plain-string metadata passes through byte-for-byte."""
+        data = TableContent(title="Users", description="A report")
+        data.add_column("name", "Name", header=True)
+        data.add_row(name="x")
+
+        resolved = resolve_audience(
+            Reports(r=Report(data=data)), Audience.HUMAN
+        )["r"].data
+        assert resolved.title == "Users"
+        assert resolved.description == "A report"
+        assert resolved.columns[0].label == "Name"
+
+
+class TestFormatAsResolvesMetadata:
+    """End-to-end: a ByAudience title renders, rather than crashing or leaking
+    the wrapper's repr."""
+
+    def _reports(self):
+        data = TableContent(
+            title=ByAudience(machine="M-title", human="H-title")
+        )
+        data.add_column("name", "Name", header=True)
+        data.add_row(name="HELLO")
+        return Reports(d=Report(data=data))
+
+    def test_display_renders_human_title(self):
+        out = strip_ansi_codes(format_as(self._reports(), "display"))
+        assert "H-title" in out
+        assert "M-title" not in out
+        assert "ByAudience" not in out
+
+    def test_json_renders_machine_title(self):
+        parsed = json.loads(format_as(self._reports(), "json"))
+        assert parsed["reports"]["d"]["metadata"]["title"] == "M-title"
+
+    def test_tsv_does_not_leak_the_wrapper_repr(self):
+        # The pre-fix bug: TSV silently emitted ``ByAudience(machine=...)``
+        # for a column label (the table *title* isn't rendered by TSV, so the
+        # label is the real silent-corruption vector here).
+        data = TableContent()
+        data.add_column(
+            "name", ByAudience(machine="M-Name", human="H-Name"), header=True
+        )
+        data.add_row(name="HELLO")
+        out = format_as(Reports(d=Report(data=data)), "tsv")
+        assert "ByAudience" not in out
+        assert "# M-Name" in out
+
+
 class TestResolveLeavesStylesUntouched:
     def test_styles_object_identity_preserved(self):
         data = (

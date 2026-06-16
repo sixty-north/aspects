@@ -26,8 +26,13 @@ collapses every ``ByAudience`` to the matching representation *before* calling
 to ``"1048576"``, and ``display`` shows ``"1.0 MiB"`` — all from one tagged
 cell.
 
-The collapse is shallow: a ``ByAudience`` that *is* a cell value is unwrapped;
-a ``ByAudience`` nested inside a list or dict cell is left alone (the machine
+A ``ByAudience`` is honoured anywhere a human-vs-machine string can
+legitimately differ: cell values (table rows, tree nodes, scalar values) and
+the surrounding metadata — a content ``title`` or ``description`` and a column
+``label``. A plain string in any of those positions is returned unchanged.
+
+The collapse is shallow: a ``ByAudience`` that *is* a value is unwrapped; a
+``ByAudience`` nested inside a list or dict cell is left alone (the machine
 formatters would serialise the container as-is anyway).
 """
 
@@ -89,14 +94,14 @@ def _resolve_value(value: Any, audience: Audience) -> Any:
 
 def _resolve_table(data: TableContent, audience: Audience) -> TableContent:
     resolved = TableContent(
-        title=data.title,
-        description=data.description,
+        title=_resolve_value(data.title, audience),
+        description=_resolve_value(data.description, audience),
         present_transposed=data.present_transposed,
     )
     for col in data.columns:
         resolved.add_column(
             key=col.key,
-            label=col.label,
+            label=_resolve_value(col.label, audience),
             header=col.header,
             importance=col.importance,
         )
@@ -109,11 +114,14 @@ def _resolve_table(data: TableContent, audience: Audience) -> TableContent:
 
 
 def _resolve_tree(data: TreeContent, audience: Audience) -> TreeContent:
-    resolved = TreeContent(title=data.title, description=data.description)
+    resolved = TreeContent(
+        title=_resolve_value(data.title, audience),
+        description=_resolve_value(data.description, audience),
+    )
     for col in data.columns:
         resolved.add_column(
             key=col.key,
-            label=col.label,
+            label=_resolve_value(col.label, audience),
             header=col.header,
             importance=col.importance,
         )
@@ -139,8 +147,8 @@ def _resolve_tree(data: TreeContent, audience: Audience) -> TreeContent:
 def _resolve_scalar(data: ScalarContent, audience: Audience) -> ScalarContent:
     return ScalarContent(
         value=_resolve_value(data.value, audience),
-        title=data.title,
-        description=data.description,
+        title=_resolve_value(data.title, audience),
+        description=_resolve_value(data.description, audience),
     )
 
 

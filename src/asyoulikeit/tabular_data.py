@@ -8,9 +8,20 @@ like TSV, JSON, or rich console tables.
 from collections.abc import Iterable, Mapping, Iterator
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from asyoulikeit.content import ReportContent
+
+if TYPE_CHECKING:
+    from asyoulikeit.audience import ByAudience
+
+    # A string slot that may instead carry a ByAudience wrapper. It is
+    # collapsed to the audience-appropriate string by
+    # asyoulikeit.audience.resolve_audience before any formatter sees it, so
+    # at runtime the alias is plain ``str``.
+    AudienceStr = str | ByAudience
+else:
+    AudienceStr = str
 
 
 # Style property keys for cell formatting
@@ -58,7 +69,7 @@ class Column:
         importance: Column importance level (ESSENTIAL or DETAIL)
     """
     key: str
-    label: str
+    label: AudienceStr
     header: bool = False
     importance: Importance = Importance.ESSENTIAL
 
@@ -86,15 +97,17 @@ class TableContent(ReportContent):
 
     def __init__(
         self,
-        title: Optional[str] = None,
-        description: Optional[str] = None,
+        title: Optional[AudienceStr] = None,
+        description: Optional[AudienceStr] = None,
         present_transposed: bool = False
     ):
         """Initialize a TableContent instance with optional metadata.
 
         Args:
-            title: Optional title for the table
-            description: Optional description of the table's contents
+            title: Optional title for the table. May be a ``ByAudience`` to
+                vary it between human and machine output.
+            description: Optional description of the table's contents. May be
+                a ``ByAudience``.
             present_transposed: Whether the table should be presented with rows
                                and columns transposed (default: False)
         """
@@ -114,8 +127,8 @@ class TableContent(ReportContent):
     def from_mappings(
         cls,
         mappings: Iterable[Mapping[str, Any]],
-        title: Optional[str] = None,
-        description: Optional[str] = None,
+        title: Optional[AudienceStr] = None,
+        description: Optional[AudienceStr] = None,
         present_transposed: bool = False
     ) -> "TableContent":
         """Create TableContent from an iterable of mappings (e.g., list of dicts).
@@ -187,7 +200,7 @@ class TableContent(ReportContent):
     def add_column(
         self,
         key: str,
-        label: str,
+        label: AudienceStr,
         header: bool = False,
         importance: Importance = Importance.ESSENTIAL
     ) -> "TableContent":
@@ -365,20 +378,22 @@ class TableContent(ReportContent):
             return self.essential_rows
 
     @property
-    def title(self) -> Optional[str]:
+    def title(self) -> Optional[AudienceStr]:
         """Get the table title.
 
         Returns:
-            The table title, or None if not set
+            The table title, or None if not set. May be a ``ByAudience``
+            until :func:`~asyoulikeit.audience.resolve_audience` collapses it.
         """
         return self._title
 
     @property
-    def description(self) -> Optional[str]:
+    def description(self) -> Optional[AudienceStr]:
         """Get the table description.
 
         Returns:
-            The table description, or None if not set
+            The table description, or None if not set. May be a ``ByAudience``
+            until :func:`~asyoulikeit.audience.resolve_audience` collapses it.
         """
         return self._description
 

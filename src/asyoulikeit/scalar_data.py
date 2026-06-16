@@ -34,6 +34,7 @@ parse ``.reports.title.value`` via ``jq``.
 from typing import Any, Optional
 
 from asyoulikeit.content import ReportContent
+from asyoulikeit.tabular_data import AudienceStr
 
 
 class ScalarContent(ReportContent):
@@ -48,8 +49,8 @@ class ScalarContent(ReportContent):
     def __init__(
         self,
         value: Any,
-        title: Optional[str] = None,
-        description: Optional[str] = None,
+        title: Optional[AudienceStr] = None,
+        description: Optional[AudienceStr] = None,
     ):
         """Initialise a new :class:`ScalarContent`.
 
@@ -63,10 +64,12 @@ class ScalarContent(ReportContent):
                 as ``metadata.title``. Not emitted by TSV unless the
                 caller explicitly sets ``header=True`` on the
                 :class:`~asyoulikeit.Report` — TSV defaults to bare
-                value output for scalars.
+                value output for scalars. May be a ``ByAudience`` to vary
+                it between human and machine output.
             description: Optional longer description. Shown dim/italic
                 below the value in display mode when headers are on;
-                present in JSON metadata; never emitted in TSV.
+                present in JSON metadata; never emitted in TSV. May be a
+                ``ByAudience``.
         """
         self._value = value
         self._title = title
@@ -83,11 +86,11 @@ class ScalarContent(ReportContent):
         return self._value
 
     @property
-    def title(self) -> Optional[str]:
-        """The scalar's title / label, if set."""
+    def title(self) -> Optional[AudienceStr]:
+        """The scalar's title / label (may be a ``ByAudience`` until resolved)."""
         return self._title
 
     @property
-    def description(self) -> Optional[str]:
-        """The scalar's description, if set."""
+    def description(self) -> Optional[AudienceStr]:
+        """The scalar's description (may be a ``ByAudience`` until resolved)."""
         return self._description

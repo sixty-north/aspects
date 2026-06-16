@@ -35,7 +35,7 @@ from types import MappingProxyType
 from typing import Any, Optional
 
 from asyoulikeit.content import ReportContent
-from asyoulikeit.tabular_data import Column, Importance
+from asyoulikeit.tabular_data import AudienceStr, Column, Importance
 
 
 class Node:
@@ -123,15 +123,16 @@ class TreeContent(ReportContent):
 
     def __init__(
         self,
-        title: Optional[str] = None,
-        description: Optional[str] = None,
+        title: Optional[AudienceStr] = None,
+        description: Optional[AudienceStr] = None,
     ):
         """Initialise a new :class:`TreeContent`.
 
         Args:
-            title: Optional title for the tree.
+            title: Optional title for the tree. May be a ``ByAudience`` to
+                vary it between human and machine output.
             description: Optional description, shown as caption below
-                the tree by the display formatter.
+                the tree by the display formatter. May be a ``ByAudience``.
         """
         self._title = title
         self._description = description
@@ -146,7 +147,7 @@ class TreeContent(ReportContent):
     def add_column(
         self,
         key: str,
-        label: str,
+        label: AudienceStr,
         header: bool = False,
         importance: Importance = Importance.ESSENTIAL,
     ) -> "TreeContent":
@@ -252,13 +253,13 @@ class TreeContent(ReportContent):
             )
 
     @property
-    def title(self) -> Optional[str]:
-        """The tree's title, if any."""
+    def title(self) -> Optional[AudienceStr]:
+        """The tree's title, if any (may be a ``ByAudience`` until resolved)."""
         return self._title
 
     @property
-    def description(self) -> Optional[str]:
-        """The tree's description / caption, if any."""
+    def description(self) -> Optional[AudienceStr]:
+        """The tree's description / caption (may be a ``ByAudience`` until resolved)."""
         return self._description
 
     @property
