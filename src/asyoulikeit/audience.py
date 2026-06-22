@@ -104,6 +104,7 @@ def _resolve_table(data: TableContent, audience: Audience) -> TableContent:
             label=_resolve_value(col.label, audience),
             header=col.header,
             importance=col.importance,
+            omit_if_empty_for=col.omit_if_empty_for,
         )
     for row, importance in zip(data.rows, data.row_importances):
         resolved.add_row(
@@ -186,3 +187,96 @@ def resolve_audience(reports: Reports, audience: Audience) -> Reports:
             for name, report in reports.items()
         }
     )
+
+
+def _cell_is_empty(value: Any) -> bool:
+    """Whether a cell counts as empty for column-omission purposes.
+
+    Empty means *absent text*: ``None`` or the empty string. Other falsy
+    values — ``0``, ``False``, an empty list — are real data and keep a column
+    alive. Whitespace-only strings are content, not emptiness. The value is
+    assumed already collapsed for the target audience.
+    """
+    return value is None or value == ""
+
+
+def _prune_table(data: TableContent, audience: Audience) -> TableContent:
+    droppable = {
+        col.key
+        for col in data.columns
+        if not col.header
+        and audience in col.omit_if_empty_for
+        and all(_cell_is_empty(row.get(col.key)) for row in data.rows)
+    }
+    if not droppable:
+        return data
+
+    kept = [col for col in data.columns if col.key not in droppable]
+    pruned = TableContent(
+        title=data.title,
+        description=data.description,
+        present_transposed=data.present_transposed,
+    )
+    for col in kept:
+        pruned.add_column(
+            key=col.key,
+            label=col.label,
+            header=col.header,
+            importance=col.importance,
+            omit_if_empty_for=col.omit_if_empty_for,
+        )
+    for row, importance in zip(data.rows, data.row_importances):
+        pruned.add_row(
+            _importance=importance,
+            **{col.key: row[col.key] for col in kept},
+        )
+    return pruned
+
+
+def prune_empty_columns(reports: Reports, audience: Audience) -> Reports:
+    """Drop columns that are empty for ``audience`` and opted in to omission.
+
+    A column declared with ``omit_if_empty_for`` containing ``audience`` is
+    dropped when every one of its data cells is empty (``None`` or ``""``).
+    This lets a provably-empty column vanish for humans (legibility, and not
+    spending terminal width on a dead column) while machine formatters keep it
+    as part of a stable schema.
+
+    Intended to run *after* :func:`resolve_audience`, so emptiness is evaluated
+    on already-collapsed values — a column that is empty for one audience but
+    not another (``ByAudience(machine=x, human="")``) is then handled
+    per-audience for free. Like ``resolve_audience``, this only takes effect via
+    :func:`~asyoulikeit.format_as`; calling a formatter's ``format()`` directly
+    bypasses it.
+
+    Scope and floor:
+
+    - Tables only. Tree and scalar content pass through unchanged.
+    - Header columns are never dropped, so a table that has one always keeps at
+      least its row-label column. Emptiness is judged on data cells alone; a
+      column's label never keeps it alive.
+    - Emptiness is judged over *all* data rows, independent of the detail-level
+      row filtering a formatter applies afterwards. A column with data only in
+      ``DETAIL`` rows therefore survives even when those rows are hidden under
+      ``--essential`` — the conservative direction (keep rather than drop).
+
+    Args:
+        reports: The reports to prune (typically already audience-resolved).
+        audience: The audience of the formatter about to render them.
+
+    Returns:
+        A new :class:`Reports` with empty opted-in columns dropped, or the same
+        object when nothing changed.
+    """
+    pruned = {}
+    changed = False
+    for name, report in reports.items():
+        data = report.data
+        if isinstance(data, TableContent):
+            new_data = _prune_table(data, audience)
+            if new_data is not data:
+                pruned[name] = replace(report, data=new_data)
+                changed = True
+                continue
+        pruned[name] = report
+    return Reports(pruned) if changed else reports

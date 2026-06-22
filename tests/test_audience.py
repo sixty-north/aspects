@@ -25,6 +25,7 @@ from asyoulikeit import (
     TreeContent,
     create_formatter,
     format_as,
+    prune_empty_columns,
     resolve_audience,
 )
 
@@ -340,6 +341,140 @@ class TestFormatAsResolvesMetadata:
         out = format_as(Reports(d=Report(data=data)), "tsv")
         assert "ByAudience" not in out
         assert "# M-Name" in out
+
+
+class TestPruneEmptyColumns:
+    """Audience-aware omission of empty columns (issue #17)."""
+
+    def _table(self, filetype_cells, *, opt_in=(Audience.HUMAN,)):
+        t = TableContent(title="ls")
+        t.add_column("name", "Name", header=True)
+        t.add_column("size", "Size")
+        t.add_column("filetype", "Filetype", omit_if_empty_for=opt_in)
+        for i, ft in enumerate(filetype_cells):
+            t.add_row(name=f"row{i}", size=i, filetype=ft)
+        return Reports(ls=Report(data=t))
+
+    def _keys(self, reports):
+        return [c.key for c in reports["ls"].data.columns]
+
+    def test_empty_opted_in_column_dropped_for_listed_audience(self):
+        pruned = prune_empty_columns(self._table(["", None]), Audience.HUMAN)
+        assert self._keys(pruned) == ["name", "size"]
+
+    def test_empty_opted_in_column_kept_for_other_audience(self):
+        pruned = prune_empty_columns(self._table(["", None]), Audience.MACHINE)
+        assert self._keys(pruned) == ["name", "size", "filetype"]
+
+    def test_non_empty_column_is_kept(self):
+        pruned = prune_empty_columns(self._table(["text", ""]), Audience.HUMAN)
+        assert "filetype" in self._keys(pruned)
+
+    def test_falsy_but_present_values_keep_the_column(self):
+        # 0 / False are real data, not emptiness.
+        for value in (0, False):
+            pruned = prune_empty_columns(self._table([value, value]), Audience.HUMAN)
+            assert "filetype" in self._keys(pruned)
+
+    def test_whitespace_is_content_not_emptiness(self):
+        pruned = prune_empty_columns(self._table([" ", "\t"]), Audience.HUMAN)
+        assert "filetype" in self._keys(pruned)
+
+    def test_byaudience_empty_for_human_only(self):
+        cells = [ByAudience(machine=5, human=""), ByAudience(machine=6, human="")]
+        reports = self._table(cells)
+        # Emptiness is judged after collapse, so it must run post-resolve.
+        human = prune_empty_columns(
+            resolve_audience(reports, Audience.HUMAN), Audience.HUMAN
+        )
+        machine = prune_empty_columns(
+            resolve_audience(reports, Audience.MACHINE), Audience.MACHINE
+        )
+        assert "filetype" not in self._keys(human)
+        assert "filetype" in self._keys(machine)
+
+    def test_header_column_is_never_dropped(self):
+        t = TableContent()
+        t.add_column("name", "Name", header=True, omit_if_empty_for={Audience.HUMAN})
+        t.add_column("size", "Size")
+        t.add_row(name="", size=1)
+        pruned = prune_empty_columns(Reports(ls=Report(data=t)), Audience.HUMAN)
+        assert pruned["ls"].data.columns[0].key == "name"
+
+    def test_empty_column_without_opt_in_is_kept(self):
+        # Default behaviour is unchanged: an empty column stays unless opted in.
+        pruned = prune_empty_columns(self._table(["", ""], opt_in=()), Audience.HUMAN)
+        assert "filetype" in self._keys(pruned)
+
+    def test_schema_importances_and_metadata_preserved(self):
+        t = TableContent(title="T", description="D")
+        t.add_column("name", "Name", header=True)
+        t.add_column("size", "Size", importance=Importance.DETAIL)
+        t.add_column("filetype", "Filetype", omit_if_empty_for={Audience.HUMAN})
+        t.add_row(name="a", size=1, filetype="", _importance=Importance.ESSENTIAL)
+        t.add_row(name="b", size=2, filetype="", _importance=Importance.DETAIL)
+
+        data = prune_empty_columns(
+            Reports(ls=Report(data=t)), Audience.HUMAN
+        )["ls"].data
+        assert data.title == "T" and data.description == "D"
+        assert [c.key for c in data.columns] == ["name", "size"]
+        assert data.columns[1].importance is Importance.DETAIL
+        assert data.row_importances == (Importance.ESSENTIAL, Importance.DETAIL)
+        assert [r["name"] for r in data.rows] == ["a", "b"]
+
+    def test_returns_same_object_when_nothing_is_pruned(self):
+        reports = self._table(["text", "text"])
+        assert prune_empty_columns(reports, Audience.HUMAN) is reports
+
+    def test_add_column_accepts_any_iterable_of_audiences(self):
+        # A list is as acceptable as a set; both normalise to a frozenset.
+        t = TableContent().add_column(
+            "x", "X", omit_if_empty_for=[Audience.HUMAN, Audience.HUMAN]
+        )
+        assert t.columns[0].omit_if_empty_for == frozenset({Audience.HUMAN})
+
+    def test_non_table_content_passes_through(self):
+        reports = Reports(s=Report(data=ScalarContent(value="v")))
+        assert prune_empty_columns(reports, Audience.HUMAN) is reports
+
+    def test_zero_rows_drops_for_human_keeps_for_machine(self):
+        # With no data at all an opted-in column is vacuously empty: dropped for
+        # the human audience, retained for the machine's stable schema.
+        pruned_human = prune_empty_columns(self._table([]), Audience.HUMAN)
+        pruned_machine = prune_empty_columns(self._table([]), Audience.MACHINE)
+        assert "filetype" not in self._keys(pruned_human)
+        assert "filetype" in self._keys(pruned_machine)
+
+
+class TestFormatAsPrunesEmptyColumns:
+    """End-to-end: the empty column disappears for humans, persists for machines."""
+
+    def _reports(self, *, transposed=False):
+        t = TableContent(present_transposed=transposed)
+        t.add_column("name", "Name", header=True)
+        t.add_column("filetype", "Filetype", omit_if_empty_for={Audience.HUMAN})
+        t.add_row(name="A", filetype="")
+        t.add_row(name="B", filetype="")
+        return Reports(ls=Report(data=t))
+
+    def test_display_omits_the_empty_column(self):
+        assert "Filetype" not in strip_ansi_codes(format_as(self._reports(), "display"))
+
+    def test_json_retains_the_empty_column(self):
+        cols = json.loads(format_as(self._reports(), "json"))["reports"]["ls"]["columns"]
+        assert any(c["key"] == "filetype" for c in cols)
+
+    def test_tsv_retains_the_empty_column(self):
+        assert "Filetype" in format_as(self._reports(), "tsv")
+
+    def test_transposed_display_omits_the_empty_field_row(self):
+        # An empty column becomes an empty row under transposition; it should
+        # still vanish for humans and persist for machines.
+        assert "Filetype" not in strip_ansi_codes(
+            format_as(self._reports(transposed=True), "display")
+        )
+        assert "Filetype" in format_as(self._reports(transposed=True), "tsv")
 
 
 class TestResolveLeavesStylesUntouched:

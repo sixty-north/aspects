@@ -3,7 +3,7 @@
 from abc import abstractmethod
 from typing import Type
 
-from asyoulikeit.audience import Audience, resolve_audience
+from asyoulikeit.audience import Audience, prune_empty_columns, resolve_audience
 from asyoulikeit.extension import (
     Extension, ExtensionError, create_extension, describe_extension,
     list_extensions, extension,
@@ -151,6 +151,9 @@ def format_as(
         # Collapse any ByAudience cells to the representation matching this
         # formatter's audience before dispatch, so format() never sees them.
         reports = resolve_audience(reports, formatter.audience)
+        # Then drop columns an author marked omit-if-empty for this audience
+        # whose cells are all empty after collapse — invisible to format().
+        reports = prune_empty_columns(reports, formatter.audience)
         return formatter.format(reports)
     except FormatterExtensionError:
         # Provide a more user-friendly error message

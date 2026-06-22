@@ -13,15 +13,23 @@ from typing import TYPE_CHECKING, Any, Optional
 from asyoulikeit.content import ReportContent
 
 if TYPE_CHECKING:
-    from asyoulikeit.audience import ByAudience
+    from asyoulikeit.audience import Audience, ByAudience
 
     # A string slot that may instead carry a ByAudience wrapper. It is
     # collapsed to the audience-appropriate string by
     # asyoulikeit.audience.resolve_audience before any formatter sees it, so
     # at runtime the alias is plain ``str``.
     AudienceStr = str | ByAudience
+    # The set of audiences a column opts in to empty-omission for, and the
+    # iterable accepted for it at the ``add_column`` boundary. Like AudienceStr
+    # these resolve to neutral runtime types so they avoid a circular import
+    # with the audience module (and keep generated docs unambiguous).
+    AudienceSet = frozenset[Audience]
+    AudienceIterable = Iterable[Audience]
 else:
     AudienceStr = str
+    AudienceSet = frozenset
+    AudienceIterable = Iterable
 
 
 # Style property keys for cell formatting
@@ -67,11 +75,16 @@ class Column:
         label: Display name for the column (shown in output)
         header: Whether this column serves as a row header/label column
         importance: Column importance level (ESSENTIAL or DETAIL)
+        omit_if_empty_for: Audiences for which this column is dropped when
+            every data cell in it is empty (``None`` or ``""``) after
+            audience collapse. Empty by default (the column is always kept).
+            See :func:`~asyoulikeit.audience.prune_empty_columns`.
     """
     key: str
     label: AudienceStr
     header: bool = False
     importance: Importance = Importance.ESSENTIAL
+    omit_if_empty_for: AudienceSet = frozenset()
 
 
 class TableContent(ReportContent):
@@ -202,7 +215,8 @@ class TableContent(ReportContent):
         key: str,
         label: AudienceStr,
         header: bool = False,
-        importance: Importance = Importance.ESSENTIAL
+        importance: Importance = Importance.ESSENTIAL,
+        omit_if_empty_for: AudienceIterable = ()
     ) -> "TableContent":
         """Add a column definition to the schema.
 
@@ -218,6 +232,15 @@ class TableContent(ReportContent):
                        always be ESSENTIAL. DETAIL columns provide supplementary information,
                        and may be omitted in machine-readable output formats to reduce clutter
                        and ease parsing.
+            omit_if_empty_for: Audiences for which this column is dropped when
+                       all of its data cells are empty (``None`` or ``""``) after
+                       audience collapse — e.g. ``{Audience.HUMAN}`` to keep a
+                       provably-empty column out of human output while machine
+                       formats retain it as part of a stable schema. Accepts any
+                       iterable of :class:`~asyoulikeit.Audience`; defaults to none
+                       (the column is always kept). Header columns are never
+                       dropped. See
+                       :func:`~asyoulikeit.audience.prune_empty_columns`.
 
         Returns:
             Self for method chaining
@@ -240,7 +263,13 @@ class TableContent(ReportContent):
         if header and importance != Importance.ESSENTIAL:
             raise ValueError("Header columns must be ESSENTIAL")
 
-        self._columns[key] = Column(key=key, label=label, header=header, importance=importance)
+        self._columns[key] = Column(
+            key=key,
+            label=label,
+            header=header,
+            importance=importance,
+            omit_if_empty_for=frozenset(omit_if_empty_for),
+        )
         return self
 
     def add_row(self, *, _importance: Importance = Importance.ESSENTIAL, **values: Any) -> "TableContent":

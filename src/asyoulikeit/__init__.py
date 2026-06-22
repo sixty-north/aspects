@@ -2,7 +2,12 @@
 
 __version__ = "1.3.0"
 
-from asyoulikeit.audience import Audience, ByAudience, resolve_audience
+from asyoulikeit.audience import (
+    Audience,
+    ByAudience,
+    prune_empty_columns,
+    resolve_audience,
+)
 from asyoulikeit.cli import (
     ALL_REPORTS,
     describe_formatter_command,
@@ -73,6 +78,7 @@ __all__ = [
     "formatter_names",
     "list_formatters_command",
     "list_reports_command",
+    "prune_empty_columns",
     "report_output",
     "resolve_audience",
 ]
