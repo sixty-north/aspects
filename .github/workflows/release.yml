@@ -39,10 +39,10 @@ jobs:
     name: Build Sphinx site (strict, gate for release)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.13"
           cache-dependency-glob: pyproject.toml
@@ -57,7 +57,7 @@ jobs:
         # deploy-docs (below) consumes this artifact via
         # actions/deploy-pages. The upload + deploy must happen in the
         # same workflow run.
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: docs/_build/html
 
@@ -77,10 +77,10 @@ jobs:
       # via OIDC. Harmless when using a token instead.
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.13"
 
@@ -115,4 +115,4 @@ jobs:
     steps:
       - name: Deploy
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5

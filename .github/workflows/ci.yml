@@ -14,10 +14,10 @@ jobs:
     name: README.md is in sync with the generator
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.13"
           cache-dependency-glob: pyproject.toml
@@ -36,10 +36,10 @@ jobs:
     name: Sphinx docs build (strict)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.13"
           cache-dependency-glob: pyproject.toml
