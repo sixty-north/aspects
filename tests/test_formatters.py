@@ -1182,13 +1182,30 @@ class TestDisplayTreeWidthBudget:
     def test_wrapped_name_hangs_under_its_own_art(self, monkeypatch):
         # A name too long for the header column turns under itself, carrying
         # the spine, rather than wrapping back to the column margin.
-        out = self._render(_deep_tree(), 80, monkeypatch)
-        # 'BasicTokeniser…Support' has a sibling below it: spine, then the
-        # hanging indent under the connector.
-        assert "│   upport" in out
+        #
+        # Asserted against the connector's own column rather than a literal
+        # fragment of the name: Rich reports one cell less on Windows (the
+        # last column is reserved against auto-wrap), so the name breaks at
+        # a different character there.
+        lines = self._render(_deep_tree(), 80, monkeypatch).splitlines()
+
+        def indent_below(marker: str, connector: str) -> str:
+            row = next(i for i, ln in enumerate(lines) if marker in ln)
+            column = lines[row].index(connector)
+            continuation = lines[row + 1]
+            # Everything left of the connector is repeated unchanged...
+            assert continuation[:column] == lines[row][:column]
+            # ...and the name resumes past the connector's width, not at the
+            # column margin.
+            assert continuation[column + len(connector):].strip()
+            return continuation[column:column + len(connector)]
+
+        # 'BasicTokeniser…Support' has a sibling below it, so its
+        # continuation carries the spine before the hanging indent.
+        assert indent_below("├── BasicTokeniser", "├── ") == "│   "
         # 'BasicDetokeniser…Tables' is the last child: no spine to continue,
-        # so the tail is indented under the connector by the art's width.
-        assert " " * 12 + "bles" in out
+        # so the continuation is blank to the same depth.
+        assert indent_below("└── BasicDetokeniser", "└── ") == "    "
 
 
 class TestDisplayTreeWidthAllocation:

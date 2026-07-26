@@ -224,12 +224,19 @@ class TestDisplayTableOverflow:
         styles.add_column("filename", "Filename", header=True)
         styles.add_column("load", "Load")
         styles.add_row(filename=None, load={STYLE_FOREGROUND_COLOR: "#FF0000"})
-        monkeypatch.setenv("COLUMNS", "36")
+        monkeypatch.setenv("COLUMNS", "24")
         monkeypatch.delenv("NO_COLOR", raising=False)
-        out = format_as(
+        rendered = format_as(
             Reports(r=Report(data=content, styles=styles)), "display"
         )
-        assert "255;0;0" in out, "cell colour lost on an elided cell"
+        bare = format_as(Reports(r=Report(data=content)), "display")
+        assert ELLIPSIS in strip_ansi_codes(rendered), "expected an elided cell"
+        # Which escape encodes the colour depends on the terminal's colour
+        # depth, which differs between a developer's terminal and CI. What
+        # must hold either way: the styled render carries markup the bare one
+        # does not, and the glyphs underneath are the same.
+        assert rendered != bare, "cell style lost on an elided cell"
+        assert strip_ansi_codes(rendered) == strip_ansi_codes(bare)
 
 
 def _archive_tree(policy=Overflow.WRAP, header_policy=None) -> TreeContent:
@@ -251,11 +258,11 @@ class TestDisplayTreeOverflow:
     """On the tree path the formatter owns the widths and elides directly."""
 
     @staticmethod
-    def _render(content, columns, monkeypatch):
+    def _render(content, columns, monkeypatch, header=True):
         monkeypatch.setenv("COLUMNS", str(columns))
         monkeypatch.setenv("NO_COLOR", "1")
         return strip_ansi_codes(
-            format_as(Reports(r=Report(data=content)), "display")
+            format_as(Reports(r=Report(data=content, header=header)), "display")
         )
 
     def test_atomic_data_column_elides_instead_of_folding(self, monkeypatch):
@@ -304,7 +311,11 @@ class TestDisplayTreeOverflow:
         node = tree.add_root(filename="ProjectArchive", load="")
         for name in ("Sources", "Interpreters", "BasicTokeniserImplementation"):
             node = node.add_child(filename=name, load="0xFFFFFB3F")
-        out = self._render(tree, columns, monkeypatch)
+        # Rendered without a header row: Rich draws the light box style on
+        # Windows and the heavy one elsewhere, so the column-label row can
+        # begin with the same border character as a body row. With no header
+        # there is nothing to tell apart.
+        out = self._render(tree, columns, monkeypatch, header=False)
         body = [ln for ln in out.splitlines() if ln.startswith("│")]
         assert len(body) == 4, f"{len(body)} rows for 4 nodes at {columns}"
 
