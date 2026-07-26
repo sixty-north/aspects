@@ -54,6 +54,42 @@ class Importance(Enum):
     DETAIL = "detail"
 
 
+class Overflow(Enum):
+    """What a column's cells should do when they don't fit the space available.
+
+    Wrapping is the right answer for prose, which reads on regardless of
+    where the lines break. It is the wrong answer for an *atomic* value — a
+    filename, an address, a byte count — which has no break opportunities
+    that mean anything: wrapping one doubles the height of the row, and
+    where the value contains a space it splits across two lines in a way
+    that reads as two separate rows.
+
+    Declaring an elision policy says the value is atomic, and says which of
+    its ends carries the information worth keeping:
+
+    - ``WRAP`` — break the value across lines. The default, and today's
+      behaviour for every column.
+    - ``ELIDE_END`` — keep the beginning (``Dircopy2…``). For values that
+      are distinguished by their prefix.
+    - ``ELIDE_START`` — keep the end (``…copy267``). For values with a long
+      common prefix, like absolute paths under a shared root.
+    - ``ELIDE_MIDDLE`` — keep both ends (``Dir…267``). For identifiers whose
+      middles are the least informative part: ``Dircopy267`` and
+      ``Dircopy254`` are told apart by their tails, ``LIBRARY/AAOBJ`` and
+      ``LIBRARY/Aform`` likewise, and end-elision discards exactly the
+      characters that distinguish neighbouring rows.
+
+    The policy is a claim about the content, so it lives on the schema
+    rather than in a formatter. Only formatters that must fit a bounded
+    width honour it: machine formats carry the whole value, which is
+    what makes eliding safe in the human one.
+    """
+    WRAP = "wrap"
+    ELIDE_START = "elide-start"
+    ELIDE_MIDDLE = "elide-middle"
+    ELIDE_END = "elide-end"
+
+
 class DetailLevel(Enum):
     """Control which columns to include in formatted output.
 
@@ -79,12 +115,17 @@ class Column:
             every data cell in it is empty (``None`` or ``""``) after
             audience collapse. Empty by default (the column is always kept).
             See :func:`~asyoulikeit.audience.prune_empty_columns`.
+        overflow: What the column's cells do when they don't fit the width
+            available — wrap (the default) or elide from one end or the
+            middle. Honoured by formatters that lay out to a bounded
+            width; ignored by those that carry the whole value.
     """
     key: str
     label: AudienceStr
     header: bool = False
     importance: Importance = Importance.ESSENTIAL
     omit_if_empty_for: AudienceSet = frozenset()
+    overflow: Overflow = Overflow.WRAP
 
 
 class TableContent(ReportContent):
@@ -216,7 +257,8 @@ class TableContent(ReportContent):
         label: AudienceStr,
         header: bool = False,
         importance: Importance = Importance.ESSENTIAL,
-        omit_if_empty_for: AudienceIterable = ()
+        omit_if_empty_for: AudienceIterable = (),
+        overflow: Overflow = Overflow.WRAP,
     ) -> "TableContent":
         """Add a column definition to the schema.
 
@@ -241,6 +283,12 @@ class TableContent(ReportContent):
                        (the column is always kept). Header columns are never
                        dropped. See
                        :func:`~asyoulikeit.audience.prune_empty_columns`.
+            overflow: What this column's cells do when they don't fit the
+                       width available (default: ``WRAP``). Declare an
+                       elision policy for atomic values — filenames,
+                       addresses, byte counts — that a wrap would split
+                       misleadingly or make a row taller for no gain. See
+                       :class:`~asyoulikeit.Overflow`.
 
         Returns:
             Self for method chaining
@@ -269,6 +317,7 @@ class TableContent(ReportContent):
             header=header,
             importance=importance,
             omit_if_empty_for=frozenset(omit_if_empty_for),
+            overflow=overflow,
         )
         return self
 

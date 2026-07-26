@@ -105,6 +105,7 @@ def _resolve_table(data: TableContent, audience: Audience) -> TableContent:
             header=col.header,
             importance=col.importance,
             omit_if_empty_for=col.omit_if_empty_for,
+            overflow=col.overflow,
         )
     for row, importance in zip(data.rows, data.row_importances):
         resolved.add_row(
@@ -125,6 +126,7 @@ def _resolve_tree(data: TreeContent, audience: Audience) -> TreeContent:
             label=_resolve_value(col.label, audience),
             header=col.header,
             importance=col.importance,
+            overflow=col.overflow,
         )
 
     def collapse(values) -> dict:
@@ -224,6 +226,7 @@ def _prune_table(data: TableContent, audience: Audience) -> TableContent:
             header=col.header,
             importance=col.importance,
             omit_if_empty_for=col.omit_if_empty_for,
+            overflow=col.overflow,
         )
     for row, importance in zip(data.rows, data.row_importances):
         pruned.add_row(

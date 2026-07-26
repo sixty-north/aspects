@@ -126,6 +126,67 @@ itself: TSV picks ``ESSENTIAL`` (pipe-friendly), JSON and display pick
 ``DETAILED`` (self-describing or human-facing).
 
 
+Narrow terminals: wrapping and eliding
+--------------------------------------
+
+When a report is wider than the terminal, cells have to give somewhere.
+Wrapping is right for prose, which reads on regardless of where the
+lines break. It is wrong for an *atomic* value — a filename, an
+address, a byte count — which has no meaningful break opportunities:
+wrapping one makes the row twice as tall, and where the value contains
+a space it splits across two lines in a way that reads as two separate
+rows:
+
+.. code-block:: text
+
+   │ ├──        │ 0xFFFFFB3F │
+   │ Copyf254   │            │
+
+Declare an :class:`~asyoulikeit.Overflow` policy to say that a column's
+values are atomic, and which of their ends is worth keeping:
+
+.. code-block:: python
+
+   from asyoulikeit import Overflow
+
+   data = (
+       TableContent()
+       .add_column("filename", "Filename", header=True,
+                   overflow=Overflow.ELIDE_MIDDLE)
+       .add_column("load", "Load", overflow=Overflow.ELIDE_END)
+       .add_column("notes", "Notes")                # WRAP, the default
+   )
+
+.. code-block:: text
+
+   │ ├── Copyf254   │ 0xFFF… │
+   │ └── Dircopy267 │ 0xFFF… │
+
+``ELIDE_MIDDLE`` is usually the one to reach for on identifiers.
+Filenames, paths and generated names tend to be distinguished by their
+tails — ``Dircopy267`` and ``Dircopy254``, ``LIBRARY/AAOBJ`` and
+``LIBRARY/Aform`` — so eliding from the end discards exactly the
+characters that tell two neighbouring rows apart, while eliding from
+the middle keeps both discriminating ends.
+
+Three things are worth knowing about how the policy behaves:
+
+* **It costs nothing until it is needed.** A value that fits is left
+  alone, so declaring a policy does not change output on a wide
+  terminal.
+* **Only bounded-width output honours it.** TSV and JSON always carry
+  the whole value — which is what makes eliding safe in the human
+  output. Nothing is lost from what a pipeline reads.
+* **An eliding column is the last to be squeezed.** The point of
+  declaring the policy is that this column carries the discriminating
+  information, so other columns give up their width first — up to the
+  point where they would become unreadable themselves.
+
+On a :class:`~asyoulikeit.TreeContent` header column the policy applies
+to the node's name and leaves the tree art intact, since eliding a
+connector would say something false about the shape of the tree.
+
+
 Multiple reports
 ----------------
 

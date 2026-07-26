@@ -35,7 +35,7 @@ from types import MappingProxyType
 from typing import Any, Optional
 
 from asyoulikeit.content import ReportContent
-from asyoulikeit.tabular_data import AudienceStr, Column, Importance
+from asyoulikeit.tabular_data import AudienceStr, Column, Importance, Overflow
 
 
 class Node:
@@ -150,6 +150,7 @@ class TreeContent(ReportContent):
         label: AudienceStr,
         header: bool = False,
         importance: Importance = Importance.ESSENTIAL,
+        overflow: Overflow = Overflow.WRAP,
     ) -> "TreeContent":
         """Add a column to the tree's schema.
 
@@ -161,6 +162,11 @@ class TreeContent(ReportContent):
                 Exactly one column on a tree must be marked header.
             importance: ``ESSENTIAL`` (default) or ``DETAIL``. Header
                 columns must be ``ESSENTIAL``.
+            overflow: What this column's cells do when they don't fit
+                the width available (default: ``WRAP``). On the header
+                column the policy applies to the node's name, leaving
+                the tree art intact. See
+                :class:`~asyoulikeit.Overflow`.
 
         Returns:
             ``self``, for method chaining.
@@ -187,7 +193,11 @@ class TreeContent(ReportContent):
         if header and importance != Importance.ESSENTIAL:
             raise ValueError("Header columns must be ESSENTIAL")
         self._columns[key] = Column(
-            key=key, label=label, header=header, importance=importance
+            key=key,
+            label=label,
+            header=header,
+            importance=importance,
+            overflow=overflow,
         )
         return self
 

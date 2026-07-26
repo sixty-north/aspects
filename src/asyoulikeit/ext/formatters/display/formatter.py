@@ -28,10 +28,13 @@ from asyoulikeit.tabular_data import (
     Column,
     DetailLevel,
     Importance,
+    Overflow,
     Reports,
     TableContent,
 )
 from asyoulikeit.tree_data import Node, TreeContent
+
+from ._elide import Elided, elide
 
 
 # C0 control bytes (U+0000–U+001F) and DEL (U+007F) are replaced with a
@@ -161,16 +164,47 @@ class DisplayFormatter(Formatter):
         )
         rows = data.rows_for_detail_level(detail_level)
 
+        console = Console(file=StringIO(), force_terminal=True)
         table = Table(
             title=data.title if header else None,
             caption=data.description if header else None,
             show_header=header,
         )
+        # Measuring every cell is only worth it if some column elides;
+        # otherwise this is Rich's job alone, exactly as it was.
+        ceilings = (
+            self._elision_ceilings(
+                columns,
+                [
+                    max(
+                        [cell_len(_sanitize_display(row[col.key])) for row in rows]
+                        + ([cell_len(col.label)] if header else [])
+                        + [1]
+                    )
+                    for col in columns
+                ],
+                console.width - (3 * len(columns) + 1),
+            )
+            if any(col.overflow != Overflow.WRAP for col in columns)
+            else {}
+        )
         for col in columns:
-            if col.header:
-                table.add_column(col.label, style="bold")
+            style = "bold" if col.header else None
+            if col.overflow == Overflow.WRAP:
+                table.add_column(col.label, style=style)
             else:
-                table.add_column(col.label)
+                # ``no_wrap`` is what makes Rich shrink the other columns
+                # in preference to this one — the point of declaring the
+                # policy is that this column's content is the part worth
+                # keeping. ``max_width`` is the price of that preference:
+                # without it Rich protects the column absolutely and the
+                # rest collapse to nothing.
+                table.add_column(
+                    col.label,
+                    style=style,
+                    no_wrap=True,
+                    max_width=ceilings[col.key],
+                )
 
         for row in rows:
             if styles:
@@ -180,17 +214,60 @@ class DisplayFormatter(Formatter):
                 for col in columns:
                     cell_value = _sanitize_display(row[col.key])
                     cell_style_dict = style_row.get(col.key)
-                    if cell_style_dict and isinstance(cell_style_dict, dict):
+                    cell_style = (
+                        self._build_rich_style(cell_style_dict)
+                        if cell_style_dict and isinstance(cell_style_dict, dict)
+                        else None
+                    )
+                    if col.overflow != Overflow.WRAP:
                         rich_cells.append(
-                            Text(cell_value, style=self._build_rich_style(cell_style_dict))
+                            Elided(cell_value, col.overflow, cell_style)
                         )
+                    elif cell_style is not None:
+                        rich_cells.append(Text(cell_value, style=cell_style))
                     else:
                         rich_cells.append(cell_value)
                 table.add_row(*rich_cells)
             else:
-                table.add_row(*[_sanitize_display(row[col.key]) for col in columns])
+                table.add_row(*[
+                    Elided(_sanitize_display(row[col.key]), col.overflow)
+                    if col.overflow != Overflow.WRAP
+                    else _sanitize_display(row[col.key])
+                    for col in columns
+                ])
 
-        return self._render_to_string(table)
+        console.print(table)
+        return console.file.getvalue()
+
+    @staticmethod
+    def _elision_ceilings(
+        columns: list[Column], naturals: list[int], budget: int
+    ) -> dict[str, int]:
+        """Cap how wide each eliding column may grow, keyed by column key.
+
+        An eliding column is marked ``no_wrap`` so that Rich squeezes its
+        neighbours first, which is the preference the policy asks for. Taken
+        alone that preference is absolute: a column wide enough can hold its
+        full natural width while every other column collapses to a cell or
+        two — the same starvation that afflicted the tree's header column in
+        issue #19, arriving by a different route.
+
+        So each eliding column is capped at what is left of the budget once
+        every *other* column has been allowed the smaller of
+        :data:`_MIN_DATA_WIDTH` and its own natural width. The cap is a
+        guard against one column taking everything, not an allocation:
+        Rich still does the layout, and still fits the total to the console.
+        """
+        floors = {
+            col.key: min(_MIN_DATA_WIDTH, natural)
+            for col, natural in zip(columns, naturals)
+        }
+        total_floor = sum(floors.values())
+        return {
+            col.key: max(_MIN_DATA_WIDTH, budget - (total_floor - floors[col.key]))
+            for col in columns
+            if col.overflow != Overflow.WRAP
+        }
 
     # -- tree ---------------------------------------------------------------
 
@@ -294,16 +371,18 @@ class DisplayFormatter(Formatter):
                     width=width_of[col.key],
                 )
             for art, cont, node in rendered:
-                name_lines = self._wrap_beside_art(
+                name_lines = self._lay_out_beside_art(
                     console, art, cont,
                     _sanitize_display(node.values[header_col.key]),
                     name_w,
+                    header_col.overflow,
                 )
                 data_lines = [
-                    self._wrap(
+                    self._lay_out(
                         console,
                         _sanitize_display(node.values[col.key]),
                         width_of[col.key],
+                        col.overflow,
                     )
                     for col in non_header_cols
                 ]
@@ -417,6 +496,53 @@ class DisplayFormatter(Formatter):
         """
         lines = [line.plain for line in Text(text).wrap(console, width)]
         return lines or [""]
+
+    @classmethod
+    def _lay_out(
+        cls, console: Console, text: str, width: int, policy: Overflow
+    ) -> list[str]:
+        """Lay ``text`` out in a ``width``-cell column under its overflow policy.
+
+        Returns the column's visual lines: several under ``WRAP``, always
+        exactly one under an elision policy — which is the point of
+        declaring one. The tree path pins its own column widths, so unlike
+        the table path it can elide here and now rather than deferring to
+        render time.
+        """
+        if policy == Overflow.WRAP:
+            return cls._wrap(console, text, width)
+        return [elide(text, width, policy)]
+
+    @classmethod
+    def _lay_out_beside_art(
+        cls,
+        console: Console,
+        art: str,
+        cont: str,
+        name: str,
+        width: int,
+        policy: Overflow,
+    ) -> list[str]:
+        """Lay a node's name out beside its tree art under ``policy``.
+
+        The budget applies to the name; the art is structure rather than
+        content, and eliding a connector would say something false about
+        the shape of the tree. So the art is kept whole and the name is
+        fitted to what it leaves — elided to a single line, or wrapped
+        with a hanging indent under the connector.
+
+        Where the art alone fills the column there is no room to keep it
+        whole and the connectors are elided along with the name. That
+        loses the shape, but an eliding column has undertaken to occupy
+        one line, and a cell that silently grew to three would cost the
+        rows around it more than the connectors are worth.
+        """
+        if policy == Overflow.WRAP:
+            return cls._wrap_beside_art(console, art, cont, name, width)
+        art_w = cell_len(art)
+        if art_w >= width:
+            return [elide(art + name, width, policy)]
+        return [art + elide(name, width - art_w, policy)]
 
     @classmethod
     def _wrap_beside_art(
@@ -547,9 +673,3 @@ class DisplayFormatter(Formatter):
             bold=style_dict.get(STYLE_BOLD, False),
             italic=style_dict.get(STYLE_ITALIC, False),
         )
-
-    def _render_to_string(self, table: Table) -> str:
-        buffer = StringIO()
-        console = Console(file=buffer, force_terminal=True)
-        console.print(table)
-        return buffer.getvalue()
