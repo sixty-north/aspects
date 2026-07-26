@@ -66,6 +66,16 @@ jobs:
     # Both gates must pass before any publication runs. If either
     # fails, neither this job nor deploy-docs executes.
     needs: [test, docs-build]
+    # Only a tag push is a release. A manual dispatch — which this
+    # workflow enables so the docs can be redeployed without cutting a
+    # release — runs from a branch, where the version in the tree has
+    # already been published. Attempting it again is not the harmless
+    # no-op it looks like: `uv build` is not reproducible (file mtimes
+    # in a fresh checkout change the wheel's hash), so PyPI would reject
+    # the upload as a different file under an existing name rather than
+    # skip it as a duplicate. Gating on the ref keeps a dispatch to what
+    # it is for, and makes the release workflow safe to re-run.
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     # The `pypi` GitHub deployment environment is the gate for PyPI
     # secrets (or trusted-publishing configuration).
