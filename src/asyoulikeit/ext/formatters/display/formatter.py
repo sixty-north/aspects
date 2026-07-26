@@ -54,6 +54,16 @@ def _sanitize_display(value) -> str:
     return str(value).translate(_DISPLAY_CONTROL_TO_SPACE)
 
 
+# Content-cell floors used when a tree has to be squeezed into a terminal
+# narrower than its natural layout. Below roughly four cells an atomic value
+# — an address, a byte count — folds one or two characters per line, so the
+# row grows taller than the value is tall while conveying it less legibly;
+# and a header column narrower than its tree art has nothing left to show a
+# name in. These are the widths at which each side stops giving ground.
+_MIN_DATA_WIDTH = 4
+_MIN_NAME_WIDTH = 8
+
+
 class DisplayFormatter(Formatter):
     """Human-oriented presentation formatter.
 
@@ -271,8 +281,8 @@ class DisplayFormatter(Formatter):
             # continuation rows (issue #13). Pinning the widths also keeps
             # the box square — Rich's auto-sizer otherwise drew a bottom
             # border wider than the body once a column wrapped.
-            data_widths = self._distribute_widths(
-                data_naturals, console.width - overhead - name_w
+            name_w, data_widths = self._budget_widths(
+                name_w, data_naturals, console.width - overhead
             )
             width_of = {header_col.key: name_w}
             for col, w in zip(non_header_cols, data_widths):
@@ -284,8 +294,11 @@ class DisplayFormatter(Formatter):
                     width=width_of[col.key],
                 )
             for art, cont, node in rendered:
-                name_text = art + _sanitize_display(node.values[header_col.key])
-                name_lines = self._wrap(console, name_text, name_w)
+                name_lines = self._wrap_beside_art(
+                    console, art, cont,
+                    _sanitize_display(node.values[header_col.key]),
+                    name_w,
+                )
                 data_lines = [
                     self._wrap(
                         console,
@@ -405,6 +418,62 @@ class DisplayFormatter(Formatter):
         lines = [line.plain for line in Text(text).wrap(console, width)]
         return lines or [""]
 
+    @classmethod
+    def _wrap_beside_art(
+        cls, console: Console, art: str, cont: str, name: str, width: int
+    ) -> list[str]:
+        """Wrap ``name`` into the header column, leaving the tree art intact.
+
+        The art and the name share a cell, but only the name is prose: the
+        connectors are the column's left margin, and a name long enough to
+        wrap should turn under itself the way a hanging indent does, rather
+        than the two being wrapped as one string and the name landing back
+        at the margin. So the name is wrapped to what the art leaves, and
+        continuation lines carry ``cont`` — the same spine the node's
+        children inherit, and by construction the same width as ``art``.
+
+        Where the art alone fills the column there is no margin left to
+        indent under; the concatenation is wrapped whole, which keeps the
+        cell inside its pinned width even if the shape is lost.
+        """
+        art_w = cell_len(art)
+        if art_w >= width:
+            return cls._wrap(console, art + name, width)
+        lines = cls._wrap(console, name, width - art_w)
+        return [art + lines[0]] + [cont + line for line in lines[1:]]
+
+    @classmethod
+    def _budget_widths(
+        cls, name_natural: int, data_naturals: list[int], budget: int
+    ) -> tuple[int, list[int]]:
+        """Divide ``budget`` cells between the header column and the data columns.
+
+        The header column carries the tree art, so its natural width grows
+        with both the depth of the tree and the length of the longest name.
+        Pinning it to that natural width and letting the data columns divide
+        whatever remained meant a deep tree could leave every data column a
+        single cell wide, folding an address one character per line and
+        multiplying the height of every row — including rows whose own
+        content would have fitted (issue #19).
+
+        So the header column yields first. Each data column is guaranteed
+        :data:`_MIN_DATA_WIDTH` content cells, or its natural width where
+        that is narrower: a column of one-character flags stays one cell
+        wide rather than being inflated at the header column's expense. The
+        header column takes what is left, down to a floor of its own, below
+        which there is no name to read beside the art and the data columns
+        take the remainder.
+
+        Returns ``(name_width, data_widths)``. Neither side is ever given
+        more than its natural width, and the total fits ``budget`` for any
+        console wide enough to give every column its floor — narrower than
+        that, no allocation renders anything worth reading.
+        """
+        floors = [min(_MIN_DATA_WIDTH, natural) for natural in data_naturals]
+        name_w = min(name_natural, budget - sum(floors))
+        name_w = max(name_w, min(name_natural, _MIN_NAME_WIDTH))
+        return name_w, cls._distribute_widths(data_naturals, budget - name_w)
+
     @staticmethod
     def _distribute_widths(naturals: list[int], available: int) -> list[int]:
         """Split ``available`` columns across data columns, mirroring Rich.
@@ -417,6 +486,9 @@ class DisplayFormatter(Formatter):
         if not naturals:
             return []
         if available < len(naturals):
+            # Not a cell each: the console is narrower than the box we are
+            # about to draw in it. Nothing renders legibly at this size —
+            # keep the arithmetic safe and let Rich squeeze what it likes.
             return [1] * len(naturals)
         total = sum(naturals) or 1
         exact = [n / total * available for n in naturals]

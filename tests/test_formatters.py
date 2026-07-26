@@ -1120,6 +1120,116 @@ class TestDisplayTreeRendering:
         assert all("│ │" not in row for row in last_cont)
 
 
+def _deep_tree() -> TreeContent:
+    """A tree whose header column, left unclamped, would starve the data columns.
+
+    Four levels of nesting and names long enough that ``art + name`` alone
+    wants 63 of an 80-column terminal — the shape from issue #19.
+    """
+    tree = (
+        TreeContent(title="Archive")
+        .add_column("filename", "Filename", header=True)
+        .add_column("load", "Load")
+        .add_column("exec", "Exec")
+        .add_column("length", "Length")
+    )
+    root = tree.add_root(filename="ProjectArchive", load="", exec="", length="")
+    sources = root.add_child(filename="Sources", load="", exec="", length="")
+    interp = sources.add_child(filename="Interpreters", load="", exec="", length="")
+    interp.add_child(
+        filename="BasicTokeniserImplementationAndDetokeniserSupport",
+        load="0xFFFFFB3F", exec="0x9D57DA00", length=14985,
+    )
+    interp.add_child(
+        filename="BasicDetokeniserImplementationWithDialectTables",
+        load="0xFFFFFB3F", exec="0x9D57DA00", length=7935,
+    )
+    return tree
+
+
+class TestDisplayTreeWidthBudget:
+    """Issue #19: the header column must yield before the data columns starve."""
+
+    @staticmethod
+    def _render(tree, columns, monkeypatch):
+        monkeypatch.setenv("COLUMNS", str(columns))
+        monkeypatch.setenv("NO_COLOR", "1")
+        return strip_ansi_codes(format_as(Reports(t=Report(data=tree)), "display"))
+
+    def test_data_columns_are_not_starved_by_a_long_header_column(self, monkeypatch):
+        # Unclamped, the header column took 63 of 80 cells and left the three
+        # data columns two each, folding 0xFFFFFB3F over five lines.
+        out = self._render(_deep_tree(), 80, monkeypatch)
+        assert "0xFFF" in out, "address folded below a legible width"
+        assert "0x9D" in out
+
+    def test_box_fits_the_console(self, monkeypatch):
+        # Pinned widths that oversubscribe the console make Rich re-shrink
+        # every column, including the one the formatter meant to pin.
+        for columns in (80, 60, 40):
+            out = self._render(_deep_tree(), columns, monkeypatch)
+            widest = max(len(line) for line in out.splitlines())
+            assert widest <= columns, f"line of {widest} cells at COLUMNS={columns}"
+
+    def test_data_survives_a_console_too_narrow_for_the_natural_layout(
+        self, monkeypatch
+    ):
+        # The degenerate case: data columns used to be squeezed to zero usable
+        # cells, rendering nothing at all while still folding to ten rows.
+        out = self._render(_deep_tree(), 40, monkeypatch)
+        assert "0xFF" in out
+
+    def test_wrapped_name_hangs_under_its_own_art(self, monkeypatch):
+        # A name too long for the header column turns under itself, carrying
+        # the spine, rather than wrapping back to the column margin.
+        out = self._render(_deep_tree(), 80, monkeypatch)
+        # 'BasicTokeniser…Support' has a sibling below it: spine, then the
+        # hanging indent under the connector.
+        assert "│   upport" in out
+        # 'BasicDetokeniser…Tables' is the last child: no spine to continue,
+        # so the tail is indented under the connector by the art's width.
+        assert " " * 12 + "bles" in out
+
+
+class TestDisplayTreeWidthAllocation:
+    """Unit-level checks on the width split behind :class:`TestDisplayTreeWidthBudget`."""
+
+    @staticmethod
+    def _budget(name_natural, data_naturals, budget):
+        from asyoulikeit.ext.formatters.display.formatter import DisplayFormatter
+        return DisplayFormatter._budget_widths(name_natural, data_naturals, budget)
+
+    def test_header_column_yields_until_data_columns_reach_their_floor(self):
+        from asyoulikeit.ext.formatters.display.formatter import _MIN_DATA_WIDTH
+        name_w, data_widths = self._budget(200, [10, 10, 10], 40)
+        assert all(w >= _MIN_DATA_WIDTH for w in data_widths)
+        assert name_w == 40 - sum(data_widths)
+
+    def test_a_naturally_narrow_column_is_not_inflated_to_the_floor(self):
+        # A column of one-character flags needs one cell; widening it to the
+        # floor would take space from the header column for nothing.
+        name_w, data_widths = self._budget(200, [1, 1], 40)
+        assert data_widths == [1, 1]
+        assert name_w == 38
+
+    def test_total_never_exceeds_the_budget(self):
+        for budget in range(24, 100):
+            name_w, data_widths = self._budget(200, [10, 6, 3], budget)
+            assert name_w + sum(data_widths) <= budget
+
+    def test_no_column_is_given_more_than_it_needs(self):
+        name_w, data_widths = self._budget(20, [10, 10], 34)
+        assert name_w <= 20
+        assert all(w <= n for w, n in zip(data_widths, [10, 10]))
+
+    def test_header_column_keeps_a_floor_of_its_own(self):
+        from asyoulikeit.ext.formatters.display.formatter import _MIN_NAME_WIDTH
+        # Data columns hungry enough to claim the whole budget still leave
+        # the header column enough to show a name beside the art.
+        name_w, _ = self._budget(200, [40, 40, 40], 30)
+        assert name_w >= _MIN_NAME_WIDTH
+
+
 class TestDisplayTreeChromeDrop:
     """When a sole tree has only the header column, the table chrome is dropped."""
 
